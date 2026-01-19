@@ -211,7 +211,7 @@ class MLTab(QWidget):
         self.canvas.setFixedSize(400, 300)  # Small default
 
         # Create large figure for full scrolling
-        fig = Figure(figsize=(40, 30))  # Extremely large → scroll to see whole graph
+        fig = Figure(figsize=(12, 8))  # Extremely large → scroll to see whole graph
         has_plot = False
 
         if hasattr(info, "importance") and info.importance:
@@ -274,4 +274,5 @@ class MLTab(QWidget):
         name = self.controller.state.active_table_name or "active"
         self.controller.state.tables[name] = df
         QMessageBox.information(self, "Applied", "Predictions/clusters (and rules) added to active data!")
+
         self.status_label.setText("Status: Predictions applied")
