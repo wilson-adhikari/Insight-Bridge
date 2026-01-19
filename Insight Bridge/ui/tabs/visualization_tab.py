@@ -151,7 +151,7 @@ class VisualizationTab(QWidget):
                 return
 
         # Very large figure → guarantees scrolling works perfectly
-        fig.set_size_inches(40, 30)  # Extremely large → you can scroll to see whole graph
+        fig.set_size_inches(12, 8)  # Extremely large → you can scroll to see whole graph
 
         # Draw the large figure
         self.canvas.draw_figure(fig)
@@ -264,4 +264,5 @@ class VisualizationTab(QWidget):
             self, "Export plot", "", "PNG (*.png);;JPEG (*.jpg);;PDF (*.pdf)"
         )
         if path:
+
             save_figure(self.canvas.figure, path)
