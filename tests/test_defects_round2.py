@@ -1,4 +1,4 @@
-"""Regression tests for docs/audit/TECHNICAL_DEBT.md defects D12, D14-D23, D25 (D24 is not fixed)."""
+"""Regression tests for docs/audit/TECHNICAL_DEBT.md defects D12, D14-D25."""
 from pathlib import Path
 
 import pytest
@@ -102,7 +102,7 @@ def test_d17_skipped_csv_rows_are_counted():
 
 
 # ---------------------------------------------------------------- D18
-def test_d18_report_and_exports_fail_loudly_without_data(qapp, msgs, monkeypatch):
+def test_d18_report_and_exports_fail_loudly_without_data(qapp, msgs, monkeypatch, settle):
     from PySide6.QtWidgets import QFileDialog
     from core.controller import Controller
     from ui.tabs.reporting_tab import ReportingTab
@@ -113,21 +113,25 @@ def test_d18_report_and_exports_fail_loudly_without_data(qapp, msgs, monkeypatch
             fn("out.bin")
 
     monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("r.pdf", "")))
-    ReportingTab(ctrl)._build_report()
+    tab = ReportingTab(ctrl)
+    tab._build_report()
+    settle(tab)
     assert msgs["critical"] and not msgs["information"]
 
 
-def test_d18_export_reports_success(qapp, msgs, monkeypatch):
+def test_d18_export_reports_success(qapp, msgs, monkeypatch, settle):
     from PySide6.QtWidgets import QFileDialog
     from ui.tabs.reporting_tab import ReportingTab
 
     monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("out.csv", "")))
-    ReportingTab(_controller())._export_csv()
+    tab = ReportingTab(_controller())
+    tab._export_csv()
+    settle(tab)
     assert Path("out.csv").exists() and msgs["information"] and not msgs["critical"]
 
 
 # ---------------------------------------------------------------- D19
-def test_d19_outlier_capping_is_configurable(qapp, msgs):
+def test_d19_outlier_capping_is_configurable(qapp, msgs, settle):
     from ui.tabs.cleaning_tab import CleaningTab
 
     df = _frame()
@@ -136,24 +140,27 @@ def test_d19_outlier_capping_is_configurable(qapp, msgs):
     tab = CleaningTab(ctrl)
     tab.refresh_from_state()
     tab.run_cleaning()
+    settle(tab)
     assert ctrl.state.active_df()["x1"].max() == 1000.0  # off by default: data untouched
 
     tab.chk_cap_outliers.setChecked(True)
     tab.run_cleaning()
+    settle(tab)
     assert ctrl.state.active_df()["x1"].max() < 1000.0
 
 
 # ---------------------------------------------------------------- D20
-def test_d20_no_traceback_in_dialogs_and_masked_connection_string(qapp, msgs, monkeypatch):
+def test_d20_no_traceback_in_dialogs_and_masked_connection_string(qapp, msgs, monkeypatch, settle):
     from PySide6.QtWidgets import QInputDialog, QLineEdit
     from ui.main_window import global_exception_hook
     from ui.tabs.data_tab import DataTab
 
-    def boom(name, path):
+    def boom(path):
         raise ValueError("bad file")
 
     tab = DataTab(_controller())
-    tab._load_local_sync(boom, "n", "p.csv")
+    tab._start_load(boom, [("n", "p.csv")])
+    settle(tab)
     try:
         raise ValueError("oops")
     except ValueError as e:
@@ -189,7 +196,7 @@ def test_d22_unsafe_unreachable_code_is_gone():
 
 
 # ---------------------------------------------------------------- D23
-def test_d23_same_stem_does_not_overwrite_and_multi_load_reports_once(qapp, msgs, monkeypatch):
+def test_d23_same_stem_does_not_overwrite_and_multi_load_reports_once(qapp, msgs, monkeypatch, settle):
     from PySide6.QtWidgets import QFileDialog
     from core.controller import Controller
     from ui.tabs.data_tab import DataTab
@@ -204,8 +211,80 @@ def test_d23_same_stem_does_not_overwrite_and_multi_load_reports_once(qapp, msgs
         QFileDialog, "getOpenFileNames", staticmethod(lambda *a, **k: (["one/sales.csv", "two/sales.csv"], ""))
     )
     tab.load_csv_multi()
+    settle(tab)
     assert len(ctrl.state.tables["sales"]) == 1 and len(ctrl.state.tables["sales_2"]) == 2
     assert len(msgs["information"]) == 1
+
+
+# ---------------------------------------------------------------- D24
+def test_d24_loading_runs_off_the_gui_thread_and_keeps_the_window_responsive(qapp, msgs, settle):
+    import threading
+    from core.controller import Controller
+    from ui.tabs.data_tab import DataTab
+
+    Path("big.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    ctrl = Controller()
+    tab = DataTab(ctrl)
+    release, seen = threading.Event(), []
+
+    def slow_read(path):
+        seen.append(threading.current_thread() is threading.main_thread())
+        release.wait(10)  # stands in for a large file
+        return ctrl.read_csv(path)
+
+    tab._start_load(slow_read, [("big", "big.csv")])
+    # Control is back with the GUI while the read is still blocked; loading again is not possible.
+    assert "big" not in ctrl.state.tables and not tab.btn_load_csv.isEnabled()
+    release.set()
+    settle(tab)
+    assert seen == [False], "the file was read on the GUI thread"
+    assert len(ctrl.state.tables["big"]) == 1 and ctrl.state.active_table_name == "big"
+    assert tab.btn_load_csv.isEnabled() and msgs["information"] and not msgs["critical"]
+
+
+def test_d24_cleaning_result_is_discarded_if_the_active_dataset_changed(qapp, msgs, settle):
+    import threading
+    from ui.tabs.cleaning_tab import CleaningTab
+
+    ctrl = _controller()
+    ctrl._post_load_processing("other", _frame())  # now "other" is active
+    ctrl.state.active_table_name = "t"
+    cleaned_t, release, real = threading.Event(), threading.Event(), ctrl.clean_preview
+
+    def clean_then_wait(cfg):
+        out = real(cfg)  # reads "t" while it is still active
+        cleaned_t.set()
+        release.wait(10)
+        return out
+
+    ctrl.clean_preview = clean_then_wait
+    tab = CleaningTab(ctrl)
+    tab.refresh_from_state()
+    tab.chk_normalize_case.setChecked(True)
+    tab.run_cleaning()
+    assert cleaned_t.wait(10)
+    ctrl.state.active_table_name = "other"  # the user switched datasets while cleaning ran
+    release.set()
+    settle(tab)
+    assert set(ctrl.state.tables["t"]["city"]) == {"ny", "LA"}, "result was written to a dataset nobody asked to clean"
+    assert set(ctrl.state.tables["other"]["city"]) == {"ny", "LA"}
+    assert msgs["warning"] and tab.btn_run.isEnabled()
+
+
+def test_d24_excel_export_runs_off_the_gui_thread(qapp, msgs, monkeypatch, settle):
+    import threading
+    from PySide6.QtWidgets import QFileDialog, QPushButton
+    from ui.tabs.reporting_tab import ReportingTab
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("out.xlsx", "")))
+    ctrl = _controller()
+    real, on_main = ctrl.export_active_to_excel, []
+    ctrl.export_active_to_excel = lambda p: (on_main.append(threading.current_thread() is threading.main_thread()), real(p))
+    tab = ReportingTab(ctrl)
+    tab._export_excel()
+    settle(tab)
+    assert on_main == [False] and Path("out.xlsx").stat().st_size > 0
+    assert msgs["information"] and not msgs["critical"] and all(b.isEnabled() for b in tab.findChildren(QPushButton))
 
 
 # ---------------------------------------------------------------- D25

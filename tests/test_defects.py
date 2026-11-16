@@ -82,7 +82,7 @@ def test_d1_ml_worker_is_kept_alive_and_runs(qapp, msgs):
     try:
         tab._train_model()
         assert _wait(qapp, lambda: got == ["result"]), "worker never ran (garbage-collected)"
-        assert _wait(qapp, lambda: tab.btn_train.isEnabled() and tab._ml_thread is None)
+        assert _wait(qapp, tab.btn_train.isEnabled)
     finally:
         _stop_threads(tab)
 
@@ -232,17 +232,19 @@ def test_d10_categorical_case_is_preserved_by_default():
     assert out["c"].tolist() == ["ny", "LA"]
 
 
-def test_d10_case_normalisation_is_opt_in_via_checkbox(qapp, msgs):
+def test_d10_case_normalisation_is_opt_in_via_checkbox(qapp, msgs, settle):
     from ui.tabs.cleaning_tab import CleaningTab
 
     ctrl = _controller()
     tab = CleaningTab(ctrl)
     tab.refresh_from_state()
     tab.run_cleaning()
+    settle(tab)
     assert set(ctrl.state.active_df()["city"]) == {"ny", "LA"}
 
     tab.chk_normalize_case.setChecked(True)
     tab.run_cleaning()
+    settle(tab)
     assert set(ctrl.state.active_df()["city"]) == {"Ny", "La"}
 
 
@@ -268,7 +270,7 @@ def test_d11_constant_strategy_without_value_is_not_silent():
         MissingValueHandler().apply(df, {"n": "numeric"}, {"n": MissingStrategyConfig("constant")})
 
 
-def test_d11_cleaning_tab_has_a_value_field_for_constant(qapp, msgs):
+def test_d11_cleaning_tab_has_a_value_field_for_constant(qapp, msgs, settle):
     from PySide6.QtCore import Qt
     from ui.tabs.cleaning_tab import CleaningTab
 
@@ -286,6 +288,7 @@ def test_d11_cleaning_tab_has_a_value_field_for_constant(qapp, msgs):
     tab.constant_edit.setText("0")
     tab._apply_to_selected()
     tab.run_cleaning()
+    settle(tab)
     out = ctrl.state.active_df()["x1"]
     assert out.notna().all() and (out == 0).sum() == 12
 

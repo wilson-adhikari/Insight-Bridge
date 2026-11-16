@@ -55,7 +55,22 @@ class Controller:
         self.on_data_changed()
 
     # ---------- Data Loading (Robust & Safe) ----------
+    # read_* and prepare_loaded touch no shared state, so the Data tab runs them off the GUI thread (D24);
+    # store_loaded then runs on the GUI thread. load_* do all three in one call.
     def load_csv(self, name: str, path: str):
+        self._post_load_processing(name, self.read_csv(path))
+
+    def load_excel(self, name: str, path: str):
+        self._post_load_processing(name, self.read_excel(path))
+
+    def load_xml(self, name: str, path: str):
+        self._post_load_processing(name, self.read_xml(path))
+
+    def load_sql_table(self, name: str, conn_str: str, table_name: str):
+        self._post_load_processing(name, self.read_sql_table(conn_str, table_name))
+
+    def read_csv(self, path: str) -> pd.DataFrame:
+        self.last_skipped_rows = 0
         encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252", "iso-8859-1"]
         df = None
         last_error = None
@@ -82,82 +97,72 @@ class Controller:
 
         if df is None:
             raise ValueError(f"Failed to read CSV (tried multiple encodings). Last error: {last_error}")
+        return df
 
-        self._post_load_processing(name, df)
-
-    def load_excel(self, name: str, path: str):
+    def read_excel(self, path: str) -> pd.DataFrame:
         try:
-            df = pd.read_excel(path, engine="openpyxl", dtype=str)
+            return pd.read_excel(path, engine="openpyxl", dtype=str)
         except Exception as e:
             raise ValueError(f"Failed to read Excel file: {e}")
-        self._post_load_processing(name, df)
 
-    def load_xml(self, name: str, path: str):
+    def read_xml(self, path: str) -> pd.DataFrame:
         try:
-            df = pd.read_xml(path, parser="etree", dtype=str)  # stdlib parser: no lxml dependency
+            return pd.read_xml(path, parser="etree", dtype=str)  # stdlib parser: no lxml dependency
         except Exception as e:
             raise ValueError(f"Failed to read XML file: {e}")
-        self._post_load_processing(name, df)
 
-    def load_sql_table(self, name: str, conn_str: str, table_name: str):
+    def read_sql_table(self, conn_str: str, table_name: str) -> pd.DataFrame:
         try:
-            df = pd.read_sql_table(table_name, conn_str)
+            return pd.read_sql_table(table_name, conn_str)
         except Exception as e:
             raise ValueError(f"Failed to load SQL table: {e}")
-        self._post_load_processing(name, df)
-
-    def load_sql_tables(self, conn_str: str, table_names: List[str]):
-        for table_name in table_names:
-            df = pd.read_sql_table(table_name, conn_str)
-            self._post_load_processing(table_name, df)
 
     def _post_load_processing(self, name: str, df: pd.DataFrame):
-        """Common processing after any load: store raw, infer schema, cast types."""
+        """Common processing after any load: infer schema, cast types, store."""
+        self.store_loaded(name, *self.prepare_loaded(df))
+
+    def prepare_loaded(self, df: pd.DataFrame):
+        """Infer logical types and cast; returns (frame, schema). Keeps the raw string frame if casting fails."""
         if df.empty:
             raise ValueError("Loaded DataFrame is empty.")
-
-        # Store raw (string) version as fallback
-        self.state.tables[name] = df.copy()
-
-        # Infer logical types
         schema = self.type_infer.infer(df)
-        self.state.schemas[name] = schema
-
-        # Apply safe type casting
         logical_dtypes = {c.name: c.logical_type for c in schema.columns.values()}
         try:
-            casted_df = self.type_caster.cast(df, logical_dtypes)
-            self.state.tables[name] = casted_df
-            print(f"[Controller] Type casting successful for {name}")
+            df = self.type_caster.cast(df, logical_dtypes)
         except Exception as e:
             print(f"[Controller] Type casting failed (using raw string DF): {e}")
             traceback.print_exc()
-            # Keep raw string DF if casting fails
+        return df, schema
 
+    def store_loaded(self, name: str, df: pd.DataFrame, schema) -> None:
+        self.state.tables[name] = df
+        self.state.schemas[name] = schema
         # Untouched copy: cleaning/filtering/ML replace the active table, never this one
-        self.state.tables[f"{name}_raw"] = self.state.tables[name]
+        self.state.tables[f"{name}_raw"] = df
         self.state.schemas[f"{name}_raw"] = schema
         self.state.active_table_name = name
 
     # ---------- Cleaning ----------
     def clean_active(self, cfg: CleaningConfig) -> tuple[Optional[pd.DataFrame], CleaningReport]:
+        name, cleaned_df, report = self.clean_preview(cfg)
+        if name:
+            self.set_active_df(cleaned_df)
+        return cleaned_df, report
+
+    def clean_preview(self, cfg: CleaningConfig) -> tuple[Optional[str], Optional[pd.DataFrame], CleaningReport]:
+        """Clean the active table without changing any state (safe off the GUI thread); returns (table name, frame, report)."""
+        name = self.state.active_table_name
         df = self.state.active_df()
         schema = self.state.active_schema()
 
         if df is None or schema is None:
-            return None, CleaningReport(initial_shape=(0, 0), final_shape=(0, 0), applied_steps=[])
+            return None, None, CleaningReport(initial_shape=(0, 0), final_shape=(0, 0), applied_steps=[])
 
         logical_dtypes = {c.name: c.logical_type for c in schema.columns.values()}
 
         # New Preprocessor per run: its sub-cleaners are built from the config at construction time
-        self.preprocessor = Preprocessor(cfg)
-        cleaned_df, report = self.preprocessor.clean(df, logical_dtypes)  # <- was .apply
-
-        # Update active table with cleaned version
-        if self.state.active_table_name:
-            self.set_active_df(cleaned_df)
-
-        return cleaned_df, report
+        cleaned_df, report = Preprocessor(cfg).clean(df, logical_dtypes)
+        return name, cleaned_df, report
 
 
     # ---------- Analysis ----------

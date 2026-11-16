@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from core.controller import Controller
+from ui.workers.task import run_in_thread
 
 
 class DataTab(QWidget):
@@ -75,95 +76,100 @@ class DataTab(QWidget):
         layout.addWidget(scroll)
         self.setLayout(layout)
 
-    # ---------- Loading with max safety ----------
-    def _load_local_sync(self, load_fn, name: str, path: str, quiet: bool = False) -> int:
-        """Load one file; returns the number of malformed rows that were skipped."""
-        base, i = name, 2
-        while name in self.controller.state.tables:  # never overwrite a loaded dataset
-            name = f"{base}_{i}"
-            i += 1
-        self.controller.last_skipped_rows = 0
-        try:
-            load_fn(name, path)
-            self.controller.state.active_table_name = name
-        except Exception as e:
-            QMessageBox.critical(self, "Load Failed", f"Could not load {Path(path).name}:\n\n{e}")
-            traceback.print_exc()  # details go to the terminal only
-            return 0
-        skipped = self.controller.last_skipped_rows
-        if not quiet:
-            note = f"\n{skipped} malformed rows were skipped." if skipped else ""
-            QMessageBox.information(self, "Success", f"Loaded {name} successfully!{note}")
+    # ---------- Loading: read on a worker thread (D24), store on the GUI thread ----------
+    def _start_load(self, read, sources):
+        """read(source) -> DataFrame; sources is [(dataset name, source)]. Never overwrites a loaded dataset (D23)."""
+        taken = set(self.controller.state.tables)
+        jobs = []
+        for base, src in sources:
+            name, i = base, 2
+            while name in taken:
+                name = f"{base}_{i}"
+                i += 1
+            taken.add(name)
+            jobs.append((name, src))
+        self._set_busy(True)
+        run_in_thread(self, self._read_all, read, jobs, on_done=self._on_loaded, on_error=self._on_load_error)
+
+    def _read_all(self, read, jobs):
+        """Runs on the worker thread: no widgets, no shared state. One bad file does not stop the others."""
+        done, failed, skipped = [], [], 0
+        for name, src in jobs:
+            self.controller.last_skipped_rows = 0  # only read_csv sets it
+            try:
+                df = read(src)
+                skipped += self.controller.last_skipped_rows
+                done.append((name, *self.controller.prepare_loaded(df)))
+            except Exception as e:
+                traceback.print_exc()  # details go to the terminal only
+                failed.append(f"{Path(str(src)).name}:\n\n{e}")
+        return len(jobs), done, failed, skipped
+
+    def _on_loaded(self, result):
+        total, done, failed, skipped = result
+        for name, df, schema in done:
+            self.controller.store_loaded(name, df, schema)
+        self._set_busy(False)
+        for msg in failed:
+            QMessageBox.critical(self, "Load Failed", f"Could not load {msg}")
+        note = f"\n{skipped} malformed rows were skipped." if skipped else ""
+        if total > 1:
+            QMessageBox.information(self, "Done", f"Processed {total} files.{note}")
+        elif done:
+            QMessageBox.information(self, "Success", f"Loaded {done[0][0]} successfully!{note}")
+        if done:
             self.refresh_tables()
             self._notify_main_window()
-        return skipped
 
-    def _load_many(self, load_fn, paths):
-        skipped = sum(self._load_local_sync(load_fn, Path(p).stem, p, quiet=True) for p in paths)
-        self.refresh_tables()
-        self._notify_main_window()
-        note = f"\n{skipped} malformed rows were skipped." if skipped else ""
-        QMessageBox.information(self, "Done", f"Processed {len(paths)} files.{note}")
+    def _on_load_error(self, msg: str):
+        self._set_busy(False)
+        QMessageBox.critical(self, "Load Failed", msg)
+
+    def _set_busy(self, busy: bool):
+        for btn in self.findChildren(QPushButton):
+            btn.setEnabled(not busy)
+        if busy:
+            self.info_label.setText("Loading…")
+
+    def _load_files(self, read, multi: bool, title: str, pattern: str):
+        if multi:
+            paths = QFileDialog.getOpenFileNames(self, title, "", pattern)[0]
+        else:
+            path = QFileDialog.getOpenFileName(self, title, "", pattern)[0]
+            paths = [path] if path else []
+        if paths:
+            self._start_load(read, [(Path(p).stem, p) for p in paths])
 
     def load_csv(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select CSV file", "", "CSV Files (*.csv)")
-        if not path: return
-        name = Path(path).stem
-        self._load_local_sync(self.controller.load_csv, name, path)
+        self._load_files(self.controller.read_csv, False, "Select CSV file", "CSV Files (*.csv)")
 
     def load_csv_multi(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Select CSV files", "", "CSV Files (*.csv)")
-        if not paths: return
-        self._load_many(self.controller.load_csv, paths)
+        self._load_files(self.controller.read_csv, True, "Select CSV files", "CSV Files (*.csv)")
 
     def load_excel(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select Excel file", "", "Excel Files (*.xlsx)")
-        if not path: return
-        name = Path(path).stem
-        self._load_local_sync(self.controller.load_excel, name, path)
+        self._load_files(self.controller.read_excel, False, "Select Excel file", "Excel Files (*.xlsx)")
 
     def load_excel_multi(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Select Excel files", "", "Excel Files (*.xlsx)")
-        if not paths: return
-        self._load_many(self.controller.load_excel, paths)
+        self._load_files(self.controller.read_excel, True, "Select Excel files", "Excel Files (*.xlsx)")
 
     def load_xml(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select XML file", "", "XML Files (*.xml)")
-        if not path: return
-        self._load_local_sync(self.controller.load_xml, Path(path).stem, path)
+        self._load_files(self.controller.read_xml, False, "Select XML file", "XML Files (*.xml)")
+
+    def _load_sql(self, prompt: str):
+        conn_str, ok1 = QInputDialog.getText(self, "SQL connection", "Enter SQLAlchemy connection string:", QLineEdit.Password)
+        if not ok1 or not conn_str.strip():
+            return
+        text, ok2 = QInputDialog.getText(self, "SQL tables", prompt)
+        tables = [t.strip() for t in text.split(",") if t.strip()] if ok2 else []
+        if tables:
+            conn_str = conn_str.strip()
+            self._start_load(lambda table: self.controller.read_sql_table(conn_str, table), [(t, t) for t in tables])
 
     def load_sql(self):
-        conn_str, ok1 = QInputDialog.getText(self, "SQL connection", "Enter SQLAlchemy connection string:", QLineEdit.Password)
-        if not ok1 or not conn_str.strip(): return
-        table_name, ok2 = QInputDialog.getText(self, "Table name", "Enter table name:")
-        if not ok2 or not table_name.strip(): return
-        name = table_name.strip()
-        try:
-            self.controller.load_sql_table(name, conn_str.strip(), table_name.strip())
-            self.controller.state.active_table_name = name
-            QMessageBox.information(self, "Success", f"Loaded SQL table {name}")
-            self.refresh_tables()
-            self._notify_main_window()
-        except Exception as e:
-            traceback.print_exc()
-            QMessageBox.critical(self, "SQL Error", f"Failed:\n{e}")
+        self._load_sql("Enter table name:")
 
     def load_sql_multi(self):
-        conn_str, ok1 = QInputDialog.getText(self, "SQL connection", "Enter SQLAlchemy connection string:", QLineEdit.Password)
-        if not ok1 or not conn_str.strip(): return
-        tables_text, ok2 = QInputDialog.getText(self, "SQL tables", "Enter table names (comma-separated):")
-        if not ok2 or not tables_text.strip(): return
-        table_names = [t.strip() for t in tables_text.split(",") if t.strip()]
-        if not table_names: return
-        try:
-            self.controller.load_sql_tables(conn_str.strip(), table_names)
-            self.controller.state.active_table_name = table_names[-1]
-            QMessageBox.information(self, "Success", "Loaded multiple SQL tables")
-            self.refresh_tables()
-            self._notify_main_window()
-        except Exception as e:
-            traceback.print_exc()
-            QMessageBox.critical(self, "SQL Error", f"Failed:\n{e}")
+        self._load_sql("Enter table names (comma-separated):")
 
     # ---------- Common ----------
     def refresh_tables(self):

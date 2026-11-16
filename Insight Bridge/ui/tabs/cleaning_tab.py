@@ -21,6 +21,7 @@ from core.controller import Controller
 from cleaning.preprocessor import CleaningConfig
 from cleaning.missing_value_handler import MissingStrategyConfig
 from ui.widgets.feature_builder import FeatureBuilder
+from ui.workers.task import run_in_thread
 
 
 # ui/tabs/cleaning_tab.py
@@ -149,11 +150,27 @@ class CleaningTab(QWidget):
         cfg.numeric_config.clip_extremes = self.chk_cap_outliers.isChecked()
         cfg.feature_config = self.feature_builder.to_config()
 
-        cleaned, report = self.controller.clean_active(cfg)
+        self.btn_run.setEnabled(False)
+        self.status_label.setText("Status: Cleaning…")
+        run_in_thread(self, self.controller.clean_preview, cfg, on_done=self._on_cleaned, on_error=self._on_clean_error)
+
+    def _on_clean_error(self, msg: str):
+        self.btn_run.setEnabled(True)
+        self.status_label.setText("Status: Cleaning failed")
+        QMessageBox.critical(self, "Failed", f"Cleaning failed:\n{msg}")
+
+    def _on_cleaned(self, result):
+        self.btn_run.setEnabled(True)
+        name, cleaned, report = result
         if cleaned is None or report is None:
             QMessageBox.warning(self, "Failed", "Cleaning failed.")
             self.status_label.setText("Status: Cleaning failed")
             return
+        if name != self.controller.state.active_table_name:
+            QMessageBox.warning(self, "Not applied", "The active dataset changed while cleaning ran, so the result was not applied.")
+            self.status_label.setText("Status: Cleaning discarded")
+            return
+        self.controller.set_active_df(cleaned)
 
         msg = f"Cleaning complete!\n\nRows: {report.initial_shape[0]} → {report.final_shape[0]}\nColumns: {report.initial_shape[1]} → {report.final_shape[1]}"
 

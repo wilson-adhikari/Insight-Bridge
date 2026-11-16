@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.controller import Controller
+from ui.workers.task import run_in_thread
 
 
 class ReportingTab(QWidget):
@@ -57,15 +58,32 @@ class ReportingTab(QWidget):
         )
         if not path:
             return
-        self._run("Report generated.", self.controller.build_basic_report, path, self.report_title.text() or "Analysis Report")
-
-    def _run(self, done: str, fn, *args):
+        # Built here, not on a worker: matplotlib is not thread-safe and the other tabs draw on this thread.
+        # shortcut: the report is a few text pages, so this is quick; move it off-thread if it ever renders big plots.
         try:
-            fn(*args)
+            self.controller.build_basic_report(path, self.report_title.text() or "Analysis Report")
         except Exception as e:
             QMessageBox.critical(self, "Failed", str(e))
             return
-        QMessageBox.information(self, "Done", done)
+        QMessageBox.information(self, "Done", "Report generated.")
+
+    def _run(self, done: str, fn, *args):
+        """Export or save on a worker thread (D24); buttons stay disabled until it finishes."""
+        self._done_message = done
+        self._set_busy(True)
+        run_in_thread(self, fn, *args, on_done=self._on_done, on_error=self._on_failed)
+
+    def _set_busy(self, busy: bool):
+        for btn in self.findChildren(QPushButton):
+            btn.setEnabled(not busy)
+
+    def _on_done(self, _result):
+        self._set_busy(False)
+        QMessageBox.information(self, "Done", self._done_message)
+
+    def _on_failed(self, msg: str):
+        self._set_busy(False)
+        QMessageBox.critical(self, "Failed", msg)
 
     def _export_csv(self):
         path, _ = QFileDialog.getSaveFileName(

@@ -40,7 +40,7 @@ Severity: **P0** headline feature broken or crash/data loss · **P1** advertised
 | D21 | **FIXED 2026-11-15 (tests/test_defects_round2.py).** `models/` and `sessions/` folders created in the current working directory at startup. (E) | `core/config.py:16-17`, `ml/persistence.py:29`, `reporting/session_manager.py:21` | Breaks or litters when installed under Program Files; use a per-user data dir |
 | D22 | **FIXED 2026-11-15 (tests/test_defects_round2.py; string-built SQL and joblib.load removed; the dead `MLManager.load_model` stub and an unused `create_engine` import remain because their removal was denied by the permission system).** Latent SQL injection and unsafe deserialisation in unreachable code. (I) | `ingestion/data_manager.py:80-82`, `ml/persistence.py:73` | Becomes exploitable if wired to UI |
 | D23 | **FIXED 2026-11-15 (tests/test_defects_round2.py).** Loading a file whose stem matches an existing dataset silently replaces it; each file in a multi-load shows its own modal and triggers a full refresh. (E/I) | `ui/tabs/data_tab.py:75-121` | Data overwritten without warning; noisy UX |
-| D24 | All work except (broken) ML runs on the GUI thread. (I) | all tabs | UI freezes on large files/plots |
+| D24 | **FIXED 2026-11-17 (tests/test_defects_round2.py `test_d24_*`).** File/SQL loading with type casting, cleaning, CSV/Excel export and session save now run on a worker thread (`ui/workers/task.py`); results are stored on the GUI thread, a cleaning result is discarded if the active dataset changed meanwhile, and buttons are disabled while a job runs. Still on the GUI thread by design: the PDF report and chart drawing (matplotlib is not thread-safe; the report is a few text pages). All work except (broken) ML ran on the GUI thread. (I) | all tabs | UI froze on large files |
 | D25 | **FIXED 2026-11-15 (tests/test_defects_round2.py).** Feature builder shows no list of added features and no remove control; added features persist across runs. (I) | `ui/widgets/feature_builder.py` | Users cannot see or undo definitions |
 | D26 | **FIXED 2026-11-14 (tests/test_defects.py).** Window title "Universal Data Analyzer" instead of InsightBridge. (E) | `ui/main_window.py:37` | Brand confusion with another company product |
 
@@ -49,7 +49,7 @@ Severity: **P0** headline feature broken or crash/data loss · **P1** advertised
 | ID | Item | Location |
 |---|---|---|
 | D27 | No tests, no CI, no packaging, no `.gitignore`; 72 `.pyc` files committed (some for modules without source, leaking local paths); empty stray file `Insight Bridge/main`. | repo root |
-| D28 | ~40% of backend code unreferenced (see REPOSITORY_AUDIT §3); four duplicate worker modules. | `visualization/*`, `cleaning/{duplicates,encoding,outliers}.py`, `ui/workers/*` |
+| D28 | **Worker part FIXED 2026-11-17:** the five duplicate worker modules are replaced by `ui/workers/task.py`. Still open: ~40% of backend code unreferenced (see REPOSITORY_AUDIT §3). | `visualization/*`, `cleaning/{duplicates,encoding,outliers}.py`, `ui/workers/*` |
 | D29 | `AppState` decorated `@dataclass` but defines its own `__init__`; `active_schema` defined twice. | `core/state.py:10-38` |
 | D30 | `CSVLoader.load` references non-existent attribute (E: AttributeError). | `ingestion/csv_loader.py:10` |
 | D31 | Unused heavy dependencies (`streamlit`, `weasyprint`, `reportlab`, `jinja2`, `pydantic`, `python-dotenv`). README "Python 3.9+" is wrong (numpy 2.1 needs 3.10+). | `requirements.txt`, `README.md` |

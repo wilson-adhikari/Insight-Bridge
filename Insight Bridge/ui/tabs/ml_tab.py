@@ -23,7 +23,7 @@ from core.controller import Controller
 from ui.widgets.column_panel import ColumnPanel
 from ui.widgets.rules_editor import RulesEditor
 from ui.widgets.plot_canvas import PlotCanvas
-from ui.workers.ml_worker import MLWorker, run_ml_in_thread
+from ui.workers.task import run_in_thread
 
 
 class MLTab(QWidget):
@@ -83,8 +83,6 @@ class MLTab(QWidget):
 
         self._last_info = None
         self._last_labels = None
-        self._ml_worker = None
-        self._ml_thread = None
 
         # Populate model combo on startup
         self._on_task_changed(self.task_combo.currentText())
@@ -191,18 +189,19 @@ class MLTab(QWidget):
             "clustering": self.controller.train_clustering_with_columns,
         }[task]
 
-        worker = MLWorker(worker_func, model_name, target, num_cols, cat_cols)
-        worker.finished.connect(self._on_trained)
-        worker.error.connect(self._on_train_error)
-        # Keep references: an unparented local worker is garbage-collected before run() executes.
-        self._ml_worker = worker
-        self.btn_train.setEnabled(False)  # a second run would drop the references of the running one
-        self._ml_thread = run_ml_in_thread(self, worker)
-        self._ml_thread.finished.connect(self._clear_ml_refs)
+        self.btn_train.setEnabled(False)  # one training run at a time
+        run_in_thread(
+            self, worker_func, model_name, target, num_cols, cat_cols,
+            on_done=self._train_done, on_error=self._train_failed,
+        )
 
-    def _clear_ml_refs(self):
-        self._ml_worker = None
-        self._ml_thread = None
+    def _train_done(self, info):
+        self.btn_train.setEnabled(True)
+        self._on_trained(info)
+
+    def _train_failed(self, msg: str):
+        self.btn_train.setEnabled(True)
+        self._on_train_error(msg)
         self.btn_train.setEnabled(True)
 
     def _on_trained(self, info):
