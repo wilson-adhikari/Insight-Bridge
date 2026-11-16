@@ -9,7 +9,7 @@ import pandas as pd
 
 @dataclass
 class CategoricalCleaningConfig:
-    normalize_case: bool = True
+    normalize_case: bool = False
     strip_whitespace: bool = True
     known_mappings: Dict[str, Dict[str, str]] = field(default_factory=dict)
     # e.g. {"city": {"NY": "New York", "N.Y.": "New York"}}

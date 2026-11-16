@@ -58,26 +58,6 @@ class ModelPersistence:
         with meta_path.open("w", encoding="utf-8") as f:
             json.dump(meta_dict, f, indent=2)
 
-    def load(self, key: str) -> tuple[Any, ModelMetadata]:
-        """
-        Load model + metadata by key.
-
-        Returns
-        -------
-        model, metadata
-        """
-        model_path, meta_path = self._paths_for_key(key)
-        if not model_path.exists() or not meta_path.exists():
-            raise FileNotFoundError(f"Model or metadata for key '{key}' not found in {self.base_dir}")
-
-        model = joblib.load(model_path)
-
-        with meta_path.open("r", encoding="utf-8") as f:
-            meta_dict = json.load(f)
-        metadata = ModelMetadata(**meta_dict)
-
-        return model, metadata
-
     def list_models(self) -> list[str]:
         """Return all model keys (based on joblib files in the directory)."""
         keys: list[str] = []

@@ -57,11 +57,15 @@ class ReportingTab(QWidget):
         )
         if not path:
             return
-        self.controller.build_basic_report(
-            path,
-            title=self.report_title.text() or "Analysis Report",
-        )
-        QMessageBox.information(self, "Done", "Report generated.")
+        self._run("Report generated.", self.controller.build_basic_report, path, self.report_title.text() or "Analysis Report")
+
+    def _run(self, done: str, fn, *args):
+        try:
+            fn(*args)
+        except Exception as e:
+            QMessageBox.critical(self, "Failed", str(e))
+            return
+        QMessageBox.information(self, "Done", done)
 
     def _export_csv(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -72,7 +76,7 @@ class ReportingTab(QWidget):
         )
         if not path:
             return
-        self.controller.export_active_to_csv(path)
+        self._run("CSV exported.", self.controller.export_active_to_csv, path)
 
     def _export_excel(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -83,7 +87,7 @@ class ReportingTab(QWidget):
         )
         if not path:
             return
-        self.controller.export_active_to_excel(path)
+        self._run("Excel file exported.", self.controller.export_active_to_excel, path)
 
     def _save_session(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -96,5 +100,4 @@ class ReportingTab(QWidget):
             return
 
         session_name = Path(path).stem
-        self.controller.save_session(session_name)
-        QMessageBox.information(self, "Saved", "Session saved.")
+        self._run("Session saved.", self.controller.save_session, session_name)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QComboBox, QLineEdit, QPushButton, QMessageBox
+    QComboBox, QLineEdit, QPushButton, QMessageBox, QListWidget
 )
 from cleaning.feature_engineering import ArithmeticFeatureDef, FeatureEngineeringConfig
 
@@ -34,10 +34,23 @@ class FeatureBuilder(QWidget):
         row.addWidget(self.right_combo)
         row.addWidget(btn_add)
 
+        self.feature_list = QListWidget()
+        self.feature_list.setMaximumHeight(80)
+        btn_remove = QPushButton("Remove selected feature")
+
         layout.addLayout(row)
+        layout.addWidget(self.feature_list)
+        layout.addWidget(btn_remove)
         self.setLayout(layout)
 
         btn_add.clicked.connect(self._on_add_clicked)
+        btn_remove.clicked.connect(self._remove_selected)
+
+    def _remove_selected(self):
+        row = self.feature_list.currentRow()
+        if row >= 0:
+            self.feature_list.takeItem(row)
+            del self._features[row]
 
     def set_columns(self, cols: List[str]):
         self._available_columns = cols
@@ -56,6 +69,7 @@ class FeatureBuilder(QWidget):
         op = self.op_combo.currentText()
         feat = ArithmeticFeatureDef(name=name, left_col=left, right_col=right, op=op)  # type: ignore[arg-type]
         self._features.append(feat)
+        self.feature_list.addItem(f"{name} = {left} {op} {right}")
         self.name_edit.clear()
 
     def to_config(self) -> FeatureEngineeringConfig:

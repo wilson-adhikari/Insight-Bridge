@@ -41,11 +41,14 @@ class MissingValueHandler:
                 if not result[col].mode().empty:
                     result[col] = result[col].fillna(result[col].mode().iloc[0])
             elif cfg.strategy == "ffill":
-                result[col] = result[col].fillna(method="ffill")
+                result[col] = result[col].ffill()
             elif cfg.strategy == "bfill":
-                result[col] = result[col].fillna(method="bfill")
+                result[col] = result[col].bfill()
             elif cfg.strategy == "constant":
-                result[col] = result[col].fillna(cfg.constant_value)
+                if cfg.constant_value is None:
+                    raise ValueError(f"Strategy 'constant' for column '{col}' needs a value.")
+                value = pd.to_numeric(cfg.constant_value) if col_type == "numeric" else cfg.constant_value
+                result[col] = result[col].fillna(value)
             elif cfg.strategy == "by_group" and cfg.group_by:
                 result[col] = (
                     result.groupby(cfg.group_by)[col]

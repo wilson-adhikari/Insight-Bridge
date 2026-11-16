@@ -12,7 +12,7 @@ from .csv_loader import CSVLoader
 from .excel_loader import ExcelLoader
 from .sql_loader import SQLLoader
 from .relationship_detector import RelationshipDetector
-from .incremental_tracker import IncrementalTracker, IncrementalSignature
+from .incremental_tracker import IncrementalTracker
 
 
 @dataclass
@@ -63,33 +63,3 @@ class DataManager:
 
         merged = pd.merge(left, right, on=config.on, how=how, suffixes=("_left", "_right"))
         return merged.head(config.limit)
-
-    # ---------------- Incremental SQL ----------------
-    def load_sql_incremental(
-        self,
-        conn_str: str,
-        table_name: str,
-        key_column: str,
-        source_id: Optional[str] = None,
-    ) -> pd.DataFrame:
-        engine = create_engine(conn_str)
-        sid = source_id or f"{conn_str}|{table_name}|{key_column}"
-        sig = self.incremental_tracker.get(sid)
-
-        if sig is None or sig.last_row_id is None:
-            query = f"SELECT * FROM {table_name}"
-        else:
-            query = f"SELECT * FROM {table_name} WHERE {key_column} > {sig.last_row_id}"
-
-        df = pd.read_sql(query, con=engine)
-
-        if not df.empty and key_column in df.columns:
-            try:
-                max_id = int(df[key_column].max())
-                self.incremental_tracker.update(
-                    IncrementalSignature(source_id=sid, last_row_id=max_id)
-                )
-            except (ValueError, TypeError):
-                pass  # key_column not integer-like → no incremental tracking
-
-        return df

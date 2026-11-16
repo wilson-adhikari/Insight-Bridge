@@ -114,14 +114,14 @@ class FilterTab(QWidget):
         if not self._conditions:
             QMessageBox.information(self, "No conditions", "Add conditions first.")
             return
-        if QMessageBox.question(self, "Confirm", "Replace active data with filtered version? (irreversible)") != QMessageBox.Yes:
+        name = self.controller.state.active_table_name
+        if QMessageBox.question(self, "Confirm", f"Replace active data with filtered version? (the original stays available as '{name}_raw')") != QMessageBox.Yes:
             return
 
         df = self.controller.state.active_df()
         try:
             filtered = self._filter_dataframe(df, self._conditions)
-            name = self.controller.state.active_table_name
-            self.controller.state.tables[name] = filtered
+            self.controller.set_active_df(filtered)
             QMessageBox.information(self, "Applied", f"Active data now has {len(filtered)} rows.")
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))

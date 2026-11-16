@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QAbstractItemView,
     QTextEdit,
+    QLineEdit,
+    QCheckBox,
 )
 
 from core.controller import Controller
@@ -53,10 +55,16 @@ class CleaningTab(QWidget):
             "drop", "mean", "median", "mode",
             "ffill", "bfill", "constant", "auto"
         ])
+        self.constant_edit = QLineEdit()
+        self.constant_edit.setPlaceholderText("value for 'constant'")
         self.btn_apply = QPushButton("Apply strategy to selected columns")
         strategy_row.addWidget(QLabel("Strategy"))
         strategy_row.addWidget(self.strategy_combo)
+        strategy_row.addWidget(self.constant_edit)
         strategy_row.addWidget(self.btn_apply)
+
+        self.chk_normalize_case = QCheckBox("Title-case categorical values (changes codes/IDs/e-mails)")
+        self.chk_cap_outliers = QCheckBox("Cap numeric outliers to the 1.5 x IQR range")
 
         self.current_strategies_text = QTextEdit()
         self.current_strategies_text.setReadOnly(True)
@@ -72,6 +80,8 @@ class CleaningTab(QWidget):
         layout.addWidget(self.col_list)
         layout.addLayout(select_row)
         layout.addLayout(strategy_row)
+        layout.addWidget(self.chk_normalize_case)
+        layout.addWidget(self.chk_cap_outliers)
         layout.addWidget(QLabel("Current per-column strategies"))
         layout.addWidget(self.current_strategies_text)
         layout.addWidget(QLabel("Feature Engineering"))
@@ -80,6 +90,7 @@ class CleaningTab(QWidget):
 
         # (rest unchanged)
         self._column_strategies: dict[str, str] = {}
+        self._constant_values: dict[str, str] = {}
 
         self.btn_apply.clicked.connect(self._apply_to_selected)
         self.btn_run.clicked.connect(self.run_cleaning)
@@ -88,6 +99,7 @@ class CleaningTab(QWidget):
         df = self.controller.state.active_df()
         self.col_list.clear()
         self._column_strategies.clear()
+        self._constant_values.clear()
         self._update_strategies_display()
         if df is not None:
             for col in df.columns:
@@ -100,9 +112,14 @@ class CleaningTab(QWidget):
             QMessageBox.warning(self, "No selection", "Select one or more columns first.")
             return
         strat = self.strategy_combo.currentText()
+        value = self.constant_edit.text().strip()
+        if strat == "constant" and not value:
+            QMessageBox.warning(self, "Missing value", "Enter a value for the 'constant' strategy.")
+            return
         for item in items:
             col = item.text()
             self._column_strategies[col] = strat
+            self._constant_values[col] = value
         self._update_strategies_display()
         self.status_label.setText(f"Status: Applied '{strat}' to {len(items)} columns")
 
@@ -110,7 +127,10 @@ class CleaningTab(QWidget):
         if not self._column_strategies:
             self.current_strategies_text.setPlainText("No per-column strategies set yet (auto/default will be used)")
             return
-        lines = [f"{col}: {strat}" for col, strat in sorted(self._column_strategies.items())]
+        lines = [
+            f"{col}: {strat}" + (f" = {self._constant_values[col]}" if strat == "constant" else "")
+            for col, strat in sorted(self._column_strategies.items())
+        ]
         self.current_strategies_text.setPlainText("\n".join(lines))
 
     def run_cleaning(self):
@@ -121,8 +141,12 @@ class CleaningTab(QWidget):
 
         cfg = CleaningConfig()
         for col, strat in self._column_strategies.items():
-            cfg.missing_strategies[col] = MissingStrategyConfig(strategy=strat)
+            cfg.missing_strategies[col] = MissingStrategyConfig(
+                strategy=strat, constant_value=self._constant_values[col] if strat == "constant" else None
+            )
 
+        cfg.categorical_config.normalize_case = self.chk_normalize_case.isChecked()
+        cfg.numeric_config.clip_extremes = self.chk_cap_outliers.isChecked()
         cfg.feature_config = self.feature_builder.to_config()
 
         cleaned, report = self.controller.clean_active(cfg)

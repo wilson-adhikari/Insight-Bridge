@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Dict, Any
 import traceback
+import warnings
 
 import pandas as pd
 
@@ -41,8 +42,17 @@ class Controller:
         self.type_infer = TypeInference()
         self.type_caster = TypeCaster(TypeCastingConfig())
         self.preprocessor = Preprocessor()
-        self.ml_manager = MLManager()
+        self.ml_manager = MLManager(self.config.models_dir)
         self.session_manager = SessionManager(self.config.sessions_dir)
+        self.on_data_changed = lambda: None  # set by the main window to refresh all tabs
+        self.last_skipped_rows = 0  # malformed CSV rows dropped by the last load_csv
+
+    def set_active_df(self, df: pd.DataFrame) -> None:
+        """Replace the active table, re-infer its schema and notify the UI."""
+        name = self.state.active_table_name
+        self.state.tables[name] = df
+        self.state.schemas[name] = self.type_infer.infer(df)
+        self.on_data_changed()
 
     # ---------- Data Loading (Robust & Safe) ----------
     def load_csv(self, name: str, path: str):
@@ -51,13 +61,16 @@ class Controller:
         last_error = None
         for enc in encodings:
             try:
-                df = pd.read_csv(
-                    path,
-                    encoding=enc,
-                    low_memory=False,
-                    on_bad_lines="skip",  # Skip malformed rows
-                    dtype=str,  # Read everything as string first for safety
-                )
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    df = pd.read_csv(
+                        path,
+                        encoding=enc,
+                        low_memory=False,
+                        on_bad_lines="warn",  # Skip malformed rows, but count them
+                        dtype=str,  # Read everything as string first for safety
+                    )
+                self.last_skipped_rows = sum(str(w.message).count("Skipping line") for w in caught)
                 print(f"[Controller] CSV loaded successfully with encoding: {enc}")
                 break
             except UnicodeDecodeError as e:
@@ -77,6 +90,13 @@ class Controller:
             df = pd.read_excel(path, engine="openpyxl", dtype=str)
         except Exception as e:
             raise ValueError(f"Failed to read Excel file: {e}")
+        self._post_load_processing(name, df)
+
+    def load_xml(self, name: str, path: str):
+        try:
+            df = pd.read_xml(path, parser="etree", dtype=str)  # stdlib parser: no lxml dependency
+        except Exception as e:
+            raise ValueError(f"Failed to read XML file: {e}")
         self._post_load_processing(name, df)
 
     def load_sql_table(self, name: str, conn_str: str, table_name: str):
@@ -114,6 +134,9 @@ class Controller:
             traceback.print_exc()
             # Keep raw string DF if casting fails
 
+        # Untouched copy: cleaning/filtering/ML replace the active table, never this one
+        self.state.tables[f"{name}_raw"] = self.state.tables[name]
+        self.state.schemas[f"{name}_raw"] = schema
         self.state.active_table_name = name
 
     # ---------- Cleaning ----------
@@ -126,13 +149,13 @@ class Controller:
 
         logical_dtypes = {c.name: c.logical_type for c in schema.columns.values()}
 
-        # Update preprocessor config from UI cfg, then call clean()
-        self.preprocessor.config = cfg
+        # New Preprocessor per run: its sub-cleaners are built from the config at construction time
+        self.preprocessor = Preprocessor(cfg)
         cleaned_df, report = self.preprocessor.clean(df, logical_dtypes)  # <- was .apply
 
         # Update active table with cleaned version
         if self.state.active_table_name:
-            self.state.tables[self.state.active_table_name] = cleaned_df
+            self.set_active_df(cleaned_df)
 
         return cleaned_df, report
 
@@ -238,28 +261,36 @@ class Controller:
         self.state.last_ml_target = None
         return info, labels
 
+    def predict_active(self) -> Optional[pd.Series]:
+        """Predictions of the last trained regression/classification model on the active data."""
+        df = self.state.active_df()
+        if df is None or self.state.last_ml_task not in ("regression", "classification"):
+            return None
+        return self.ml_manager.predict(
+            self.state.last_ml_key, df, self.state.last_ml_num_cols, self.state.last_ml_cat_cols
+        )
+
     # ---------- Export ----------
     def export_active_to_csv(self, path: str):
         df = self.state.active_df()
-        if df is not None and self.state.active_table_name:
-            export_cleaned_to_csv(
-                {self.state.active_table_name: df},
-                path,
-            )
+        if df is None:
+            raise ValueError("No data loaded.")
+        export_cleaned_to_csv(df, path)
 
     def export_active_to_excel(self, path: str):
         df = self.state.active_df()
-        if df is not None and self.state.active_table_name:
-            export_cleaned_to_excel(
-                {self.state.active_table_name: df},
-                path,
-            )
+        if df is None:
+            raise ValueError("No data loaded.")
+        export_cleaned_to_excel(
+            {self.state.active_table_name: df},
+            path,
+        )
 
     # ---------- Reporting ----------
     def build_basic_report(self, path: str, title: str = "Analysis Report"):
         df = self.state.active_df()
         if df is None:
-            return
+            raise ValueError("No data loaded.")
 
         sections = [
             SectionText(title="Dataset Overview", body=f"Rows: {len(df):,}\nColumns: {df.shape[1]}"),
@@ -283,7 +314,7 @@ class Controller:
         state = SessionState(
             active_dataset_name=self.state.active_table_name,
             datasets=list(self.state.tables.keys()),
-            models={k: v.dict() for k, v in self.state.models.items()},  # assuming ModelMetadataSchema has .dict()
+            models={k: f"{v.kind} {v.model_name} target={v.target_col}" for k, v in self.ml_manager.models.items()},
             extra={},
         )
         self.session_manager.save(name, state)

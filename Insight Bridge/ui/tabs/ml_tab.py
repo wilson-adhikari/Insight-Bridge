@@ -82,6 +82,9 @@ class MLTab(QWidget):
         self.btn_apply.clicked.connect(self._apply_predictions)
 
         self._last_info = None
+        self._last_labels = None
+        self._ml_worker = None
+        self._ml_thread = None
 
         # Populate model combo on startup
         self._on_task_changed(self.task_combo.currentText())
@@ -100,6 +103,7 @@ class MLTab(QWidget):
         cat_cols = [c.name for c in schema.columns.values() if c.logical_type in ("categorical", "boolean")]
 
         self.column_panel.set_columns(numeric_cols, cat_cols)
+        self._update_rule_sources(df)
 
         # Populate target combo with all columns initially
         self.target_combo.addItems(df.columns.tolist())
@@ -123,6 +127,10 @@ class MLTab(QWidget):
             self.target_combo.setEnabled(False)
 
         self.status_label.setText(f"Status: Ready - {len(numeric_cols)} numeric, {len(cat_cols)} categorical columns")
+
+    def _update_rule_sources(self, df):
+        extra = [c for c in ("prediction", "cluster_label") if c not in df.columns]
+        self.rules_editor.set_source_columns(df.columns.tolist() + extra)
 
     def _on_task_changed(self, task: str):
         self.model_combo.clear()
@@ -186,9 +194,21 @@ class MLTab(QWidget):
         worker = MLWorker(worker_func, model_name, target, num_cols, cat_cols)
         worker.finished.connect(self._on_trained)
         worker.error.connect(self._on_train_error)
-        run_ml_in_thread(self, worker)
+        # Keep references: an unparented local worker is garbage-collected before run() executes.
+        self._ml_worker = worker
+        self.btn_train.setEnabled(False)  # a second run would drop the references of the running one
+        self._ml_thread = run_ml_in_thread(self, worker)
+        self._ml_thread.finished.connect(self._clear_ml_refs)
+
+    def _clear_ml_refs(self):
+        self._ml_worker = None
+        self._ml_thread = None
+        self.btn_train.setEnabled(True)
 
     def _on_trained(self, info):
+        self._last_labels = None
+        if isinstance(info, tuple):  # clustering returns (info, labels)
+            info, self._last_labels = info
         if info is None:
             self.status_label.setText("Status: Training failed")
             QMessageBox.warning(self, "Failed", "Training returned no result. Check selection/data.")
@@ -214,9 +234,10 @@ class MLTab(QWidget):
         fig = Figure(figsize=(12, 8))  # Extremely large → scroll to see whole graph
         has_plot = False
 
-        if hasattr(info, "importance") and info.importance:
+        if info.feature_importance is not None:
             ax1 = fig.add_subplot(121)
-            importances = sorted(info.importance.items(), key=lambda x: abs(x[1]), reverse=True)[:20]
+            fi = info.feature_importance
+            importances = sorted(zip(fi.feature_names, fi.importances), key=lambda x: abs(x[1]), reverse=True)[:20]
             if importances:
                 cols, vals = zip(*importances)
                 ax1.barh(cols, vals)
@@ -224,11 +245,13 @@ class MLTab(QWidget):
                 ax1.invert_yaxis()
                 has_plot = True
 
-        if hasattr(info, "predicted") and hasattr(info, "actual"):
+        if info.kind == "regression":
+            actual = self.controller.state.active_df()[info.target_col]
+            predicted = self.controller.predict_active()
             ax2 = fig.add_subplot(122)
-            ax2.scatter(info.actual, info.predicted, alpha=0.6)
-            min_v = min(info.actual.min(), info.predicted.min())
-            max_v = max(info.actual.max(), info.predicted.max())
+            ax2.scatter(actual, predicted, alpha=0.6)
+            min_v = min(actual.min(), predicted.min())
+            max_v = max(actual.max(), predicted.max())
             ax2.plot([min_v, max_v], [min_v, max_v], "r--", label="Perfect prediction")
             ax2.set_xlabel("Actual")
             ax2.set_ylabel("Predicted")
@@ -260,10 +283,11 @@ class MLTab(QWidget):
 
         df = self.controller.state.active_df().copy()
 
-        if hasattr(self._last_info, "predicted"):
-            df["prediction"] = self._last_info.predicted
-        if hasattr(self._last_info, "cluster_labels"):
-            df["cluster_label"] = self._last_info.cluster_labels.astype(int)
+        predicted = self.controller.predict_active()
+        if predicted is not None:
+            df["prediction"] = predicted
+        if self._last_labels is not None:
+            df["cluster_label"] = self._last_labels.astype(int)
 
         rules = self.rules_editor.rules()
         if rules:
@@ -271,8 +295,8 @@ class MLTab(QWidget):
             engine = RulesEngine()
             df = engine.apply_rules(df, rules)
 
-        name = self.controller.state.active_table_name or "active"
-        self.controller.state.tables[name] = df
+        self.controller.set_active_df(df)
+        self._update_rule_sources(df)
         QMessageBox.information(self, "Applied", "Predictions/clusters (and rules) added to active data!")
 
         self.status_label.setText("Status: Predictions applied")

@@ -24,7 +24,7 @@ def global_exception_hook(exctype, value, tb):
     QMessageBox.critical(
         None,
         "Critical Error",
-        f"An unexpected error occurred:\n\n{error_msg}\n\n"
+        f"An unexpected error occurred:\n\n{value}\n\n"
         "The app will continue running if possible, but check console for details.",
     )
     # Do NOT sys.exit() - we want to see where it happens
@@ -34,7 +34,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.controller = Controller()
-        self.setWindowTitle("Universal Data Analyzer")
+        self.setWindowTitle("InsightBridge")
         self.resize(1400, 900)
 
         self.tabs = QTabWidget()
@@ -57,6 +57,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.ml_tab, "ML")
         self.tabs.addTab(self.join_tab, "Joins")
         self.tabs.addTab(self.reporting_tab, "Reporting")
+
+        # Cleaning, filtering and ML apply change the active data: refresh every tab afterwards
+        self.controller.on_data_changed = self.refresh_tabs
 
     def refresh_tabs(self):
         print("\n=== Starting refresh_tabs() ===")

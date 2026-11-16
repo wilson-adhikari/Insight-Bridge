@@ -1,6 +1,7 @@
 # core/config.py
 from __future__ import annotations
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -13,5 +14,6 @@ class CleaningThresholds:
 @dataclass
 class AppConfig:
     cleaning: CleaningThresholds = field(default_factory=CleaningThresholds)
-    models_dir: str = "models"
-    sessions_dir: str = "sessions"
+    # Per-user data dir: the cwd may be read-only (e.g. Program Files).
+    models_dir: str = field(default_factory=lambda: str(Path.home() / ".insightbridge" / "models"))
+    sessions_dir: str = field(default_factory=lambda: str(Path.home() / ".insightbridge" / "sessions"))

@@ -3,180 +3,70 @@ InsightBridge
 
 **Offline-First Desktop Data Intelligence Platform**
 
-InsightBridge is a no-code, offline-first **desktop application** that enables users to clean, analyze, visualize, and extract insights from raw data—securely, privately, and without cloud dependency.
+InsightBridge is a no-code, offline **desktop application** (Python + PySide6) for loading, cleaning, analysing, visualising and modelling tabular data on your own machine, without any cloud dependency.
 
-🚀 Features
------------
+Features
+--------
 
-*   **Fully Offline Desktop Application**No internet connection required.
-    
-*   **Multi-Source Data Import**Supports:
-    
-    *   CSV
-        
-    *   Excel
-        
-    *   XML
-        
-    *   SQL databases
-        
-*   **No-Code Data Cleaning**Automatically handle missing values, inconsistent entries, and formatting issues.
-    
-*   **Automated Visualization Suggestions**The system recommends suitable charts and graphs based on dataset structure and data types.
-    
-*   **Data Visualization & Insights**Generate summaries, trends, and visual representations.
-    
-*   **Local Machine Learning Support**Train machine learning models locally using user-selected configurations.
-    
-*   **Report Export**Export insights, visualizations, and ML outputs as structured reports (PDF / Excel).
-    
-*   **Privacy-First Design**All processing is performed locally.
-    
+Each item below is a tab in the application.
 
-🎯 Problem It Solves
---------------------
+*   **Data** – import CSV, Excel (`.xlsx`), XML (flat, row-oriented files) and SQL tables (SQLAlchemy connection string; the database driver must be installed separately). Malformed CSV rows are skipped and counted in the load message. Every loaded dataset keeps an untouched copy named `<name>_raw`.
+*   **Cleaning** – per-column missing-value strategies (drop, mean, median, mode, ffill, bfill, constant, auto), optional title-casing of categorical values, optional capping of numeric outliers (1.5 x IQR), and simple arithmetic features (add / sub / mul / div of two columns).
+*   **Filter** – build conditions (`>`, `==`, `contains`, `in`, `between`, ...), preview the result and apply it to the active dataset.
+*   **Analysis** – numeric summaries, categorical frequency tables and numeric-vs-categorical relationship hints.
+*   **Visualization** – charts you choose yourself (histogram, scatter, line, bar, box, violin, KDE, correlation heatmap and others) with plot export.
+*   **ML** – local training of regression (linear, random forest), classification (logistic, random forest) and k-means clustering; predictions or cluster labels can be added to the data, with optional decision rules.
+*   **Joins** – preview a join between two loaded datasets.
+*   **Reporting** – basic PDF report, export of the active dataset to CSV or Excel, and saving a session file.
 
-Many individuals and organizations possess data but struggle with:
+All processing is local. No data leaves the machine.
 
-*   Poor structure
-    
-*   Lack of analytical tools
-    
-*   Limited technical expertise
-    
-*   Internet or privacy constraints
-    
-
-InsightBridge removes these barriers by offering an offline, intelligent, and user-friendly desktop solution.
-
-👥 Intended Users
+Known limitations
 -----------------
 
-*   Students and educators
-    
-*   Researchers and analysts
-    
-*   Small and medium businesses
-    
-*   NGOs and offline-first environments
-    
-*   Beginners in data analysis and ML
-    
+*   Apart from ML training, work runs on the UI thread, so the window can freeze on large files or plots.
+*   A saved session records dataset and model names only; there is no "Load session" in the UI yet.
+*   Old `.xls` workbooks are not supported; save them as `.xlsx` first.
+*   Charts are picked manually; the app does not propose chart types.
+*   Join results can be previewed but not saved as a new dataset.
 
-🧠 Supported Data
------------------
+Requirements
+------------
 
-*   Structured and semi-structured datasets
-    
-*   Numerical and categorical data
-    
-*   Time-series and analytical datasets
-    
+*   Python 3.11 (the version the tests run on)
+*   Desktop OS (Windows / Linux / macOS), 4 GB RAM
+*   Python packages: see `Insight Bridge/requirements.txt` (tested versions are pinned)
 
-🛠️ How It Works (High-Level)
------------------------------
-
-1.  Import data from supported sources
-    
-2.  Clean and preprocess automatically
-    
-3.  Receive automated graph suggestions
-    
-4.  Explore visual summaries and trends
-    
-5.  Train ML models locally (optional)
-    
-6.  Export reports and results
-    
-
-⚠️ Known UI Limitation (Important)
-----------------------------------
-
-Some UI buttons are currently **non-functional or partially implemented**.
-
-**Explanation:**
-
-*   InsightBridge is under **active development**
-    
-*   Priority is given to **core data processing, visualization logic, and offline capability**
-    
-*   Certain UI elements act as **placeholders for future interaction flows**
-    
-
-**Impact:**
-
-*   Core analytics, visualization suggestions, ML workflows, and report export work correctly
-    
-*   Some interface controls may not yet trigger actions
-    
-*   This does not affect system accuracy or data integrity
-    
-
-🔒 Data Privacy
+Install and run
 ---------------
 
-All data remains on the user’s local machine.No cloud services. No external data transfer.
+```
+cd "Insight Bridge"
+python -m venv .venv
+.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
 
-🧪 Project Status
------------------
+Trained-model and session files are written to `~/.insightbridge/`.
 
-*   **Stage:** Advanced MVP / Functional Desktop System
-    
-*   **Visualization Intelligence:** Implemented
-    
-*   **Local ML:** Implemented
-    
-*   **Reporting:** Implemented
-    
-*   **UI Polish:** Ongoing
-    
+Tests
+-----
 
-📈 Planned Enhancements
------------------------
+From the repository root, in the same environment:
 
-*   Complete UI action bindings
-    
-*   Enhanced visualization recommendations
-    
-*   More interactive dashboards
-    
-*   Custom report templates
+```
+python -m pytest tests -q
+```
 
-## Requirements
-- Python 3.9+
-- pip
-- 4 GB RAM
-- Desktop OS (Windows / Linux / macOS)
+The Qt tests run headless (`QT_QPA_PLATFORM=offscreen` is set by `tests/conftest.py`).
 
-## Librarys
-- streamlit>=1.28.1
-- pandas>=2.2
-- numpy>=2.1
-- matplotlib>=3.8
-- seaborn>=0.13
-- scikit-learn>=1.4
-- scipy>=1.11.2
-- joblib>=1.3
-- sqlalchemy>=2.0.21
-- openpyxl>=3.1.2
-- python-dotenv>=1.0.0
-- pydantic>=2.3.0
-- jinja2>=3.1.2
-- reportlab>=4.0.4
-- weasyprint>=59.0
-- PySide6>=6.5.1
-- pytest>=7.4.0
-- pytest-cov>=4.1.0
-- black>=23.9.1
-- flake8>=6.0.0
+Project status
+--------------
 
+Working MVP. Open defects and their status are tracked in `docs/audit/TECHNICAL_DEBT.md`.
 
-📄 License
-----------
+License
+-------
 
-This project is intended for educational, research, and innovation purposes. Licensing terms can be adapted as needed.
-
-🌉 Why InsightBridge?
----------------------
-
-Data alone is noise. Insight is signal.InsightBridge exists to extract that signal—offline and intelligently.
+See `LICENSE`.
